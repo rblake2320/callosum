@@ -88,13 +88,23 @@ class BrainEnvelope:
     def hot_swap(self, side: str, new_adapter: HemisphereAdapter) -> None:
         old = self.occupants[side]
         ck = old.checkpoint()
+        # Swapping in a fresh occupant for a side that was declared dead or
+        # already absorbed by the survivor is the same situation rejoin()
+        # exists for (a "false death" returning): the replacement should earn
+        # trust back under quarantine, not inherit full authority for free.
+        # Without this, an operator recovering from a kill drill via hot_swap
+        # instead of rejoin() silently skips the documented quarantine gate.
+        was_dead_or_absorbed = (not self.alive[side]) or (side in self.failover._state()["handled"])
         self.ledger.append("hot_swap", {
             "side": side, "old": old.name, "new": new_adapter.name,
             "envelope_id": self.envelope_id, "occupant_checkpoint_keys": sorted(ck),
+            "was_dead_or_absorbed": was_dead_or_absorbed,
         })
         new_adapter.restore({})  # occupant state does NOT transfer; memory lives above
         self.occupants[side] = new_adapter
         self.alive[side] = True
+        if was_dead_or_absorbed:
+            self.failover.rejoin(side)
 
     def checkpoint(self) -> dict:
         return {

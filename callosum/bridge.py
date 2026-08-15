@@ -1,6 +1,9 @@
 """The callosum: an INHIBITORY, evidence-gated bridge -- not a pipe.
 
 Transmission rules (in order):
+  0. Unrecognized kind -> REJECTED. Fail closed, not open -- the bridge must
+     not depend on every caller pre-validating msg["kind"] to stay the sole
+     inhibitory checkpoint.
   1. Epoch fence: msg.epoch != current epoch -> REJECTED (split-brain guard).
      Equality, not `<`. A `<` test fences only honest stragglers: a fenced
      hemisphere could stamp an arbitrarily high epoch and walk straight through
@@ -24,7 +27,7 @@ from __future__ import annotations
 
 import os
 
-from .evidence import INFLUENCE_KINDS, validate_msg_evidence
+from .evidence import ALL_KINDS, INFLUENCE_KINDS, validate_msg_evidence
 from .transport import FileDropBus, get_epoch
 from .util import read_json
 
@@ -51,6 +54,13 @@ class Callosum:
             "msg_id": msg["msg_id"], "sender": msg["sender"], "recipient": msg["recipient"],
             "subtask": msg["subtask"], "kind": msg["kind"],
         }
+        # 0. unrecognized kind: fail closed, not open. make_msg() already
+        # enforces this for the shipped call sites, but the bridge is
+        # documented as the sole inhibitory checkpoint -- it must not depend
+        # on every caller pre-validating to keep that true (defense in depth).
+        if msg["kind"] not in ALL_KINDS:
+            self.ledger.append("bridge_rejected", dict(base, reason=f"unrecognized kind: {msg['kind']!r}"))
+            return {"status": "rejected", "reason": "unrecognized_kind", "evidence_valid": False}
         # 1. epoch fence (equality: a forged-forward epoch must not bypass the guard)
         current = get_epoch(self.root)
         sent = msg.get("epoch", 0)
@@ -89,7 +99,8 @@ class Callosum:
         note = "unadjudicated subtask" if (authority is None and not quarantined and not degraded) else "ok"
         result = self._deliver(msg, base, ev_ok, note=note)
         if quarantined and ev_ok and self.quarantine:
-            self.quarantine.credit(msg["sender"], self.ledger)
+            evidence_hashes = {r.get("sha256") for r in msg.get("evidence", []) if r.get("sha256")}
+            self.quarantine.credit(msg["sender"], self.ledger, evidence_hashes=evidence_hashes)
         return result
 
     def _deliver(self, msg: dict, base: dict, ev_ok: bool, note: str) -> dict:

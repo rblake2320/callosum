@@ -83,8 +83,19 @@ if os.name == "nt":  # pragma: no cover - exercised on Windows only
             deadline = time.monotonic() + self.timeout
             self._f = open(self.path, "a+b")  # noqa: SIM115 - the lock owns this handle for its lifetime
             if self._f.tell() == 0:
-                self._f.write(b"\0")
-                self._f.flush()
+                # Racing processes can all observe an empty file and land here
+                # concurrently, before any of them holds the lock -- Windows
+                # append-mode is not atomic across processes the way POSIX
+                # O_APPEND is, so two simultaneous writers here can collide
+                # (observed: PermissionError out of flush()). Losing the race
+                # is fine -- another process's write left the file non-empty --
+                # so treat it like any other contended-lock retry instead of
+                # letting it crash the whole process.
+                try:
+                    self._f.write(b"\0")
+                    self._f.flush()
+                except OSError:
+                    pass
             while True:
                 try:
                     self._f.seek(0)

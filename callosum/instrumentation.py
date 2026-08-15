@@ -35,6 +35,14 @@ class PositionTracker:
         return h
 
     def reveal(self, hemis=("left", "right")) -> dict:
+        # ledger.entries() is a raw JSONL parse with no signature/chain checking.
+        # Without this, an attacker with filesystem write access to the ledger
+        # directory can append an unsigned/garbage position_commit entry and
+        # reveal() will treat it as a legitimately sealed independent
+        # commitment (same threat model as capability.py's rebuild_from_ledger).
+        ok, reason = self.ledger.verify(trusted_pubs={self.ledger.signer.pub_hex})
+        if not ok:
+            raise RuntimeError(f"reveal blocked: ledger failed verification: {reason}")
         commits = {}
         for e in self.ledger.entries():
             if e["kind"] == "position_commit":

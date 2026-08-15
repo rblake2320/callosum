@@ -49,6 +49,22 @@ class CorrectionStore:
                 ok, reason = validate_ref(r, self.evidence_root)
                 if not ok:
                     raise ValueError(f"evidence rejected ({r.get('path')}): {reason}")
+                # validate_ref only binds the ref to a real, unmodified artifact
+                # (sha256 + jail) -- it says nothing about what happened when the
+                # artifact's command ran. Per evidence.py, a test-run record is
+                # {cmd, exit_code, output_sha256}; a 'verified_correction' whose
+                # own cited proof records a failing run (exit_code != 0) is not
+                # actually verified and must not be marked publishable.
+                if pkg["status"] == "verified_correction":
+                    try:
+                        content = json.loads(open(os.path.join(self.evidence_root, r["path"]), "rb").read())
+                    except (json.JSONDecodeError, OSError):
+                        content = None
+                    if isinstance(content, dict) and content.get("exit_code") not in (None, 0):
+                        raise ValueError(
+                            f"evidence rejected ({r.get('path')}): cited run failed "
+                            f"(exit_code={content.get('exit_code')}), cannot verify a correction with it"
+                        )
         rec = dict(
             pkg,
             correction_id=pkg.get("correction_id", uuid.uuid4().hex),

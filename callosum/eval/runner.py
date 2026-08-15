@@ -72,7 +72,10 @@ def run_eval(base_dir, tasks: list, hb_interval: float = 0.05) -> dict:
         # E kill drill (kill the side named by the task, default right)
         env, _, _ = _mk_env(base_dir, f"{task['id']}_drill", task, hb_interval)
         kr = env.run_session(task, kill_side=task.get("kill_side", "right"), kill_after_round=0)
-        row["E_kill_drill"] = int((kr["final"]["left"] == truth) if kr["failover"] else 0)
+        # Score the SURVIVOR's final position, not a hardcoded "left" -- demo_tasks()
+        # kills whichever side is ungrounded, so for half the tasks the survivor is
+        # "right" and this was silently scoring the dead side's stale position.
+        row["E_kill_drill"] = int((kr["final"][kr["failover"]["survivor"]] == truth) if kr["failover"] else 0)
         row["E_failover"] = kr["failover"]
 
         row["best_single"] = max(row["A_left_solo"], row["B_right_solo"])

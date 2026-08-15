@@ -79,6 +79,28 @@ def test_forged_evidence_rejected_at_submit(cstore):
         cs.submit({"claim": "X", "status": "refuted", "environment": {}, "evidence": [bad]})
 
 
+def test_verified_correction_with_failed_run_evidence_rejected(cstore):
+    """validate_ref only binds a ref to a real, unmodified artifact (sha256 +
+    jail) -- it says nothing about whether the cited run actually succeeded.
+    A 'verified_correction' citing its own proof of a FAILED run must not be
+    accepted as verified just because the evidence integrity check passes."""
+    ev, cs = cstore
+    (ev / "failed.json").write_bytes(b'{"cmd":"pytest","exit_code":1}')
+    with pytest.raises(ValueError, match="cited run failed"):
+        cs.submit({"claim": "X", "status": "verified_correction", "environment": {},
+                   "evidence": [make_evidence(ev, "failed.json")]})
+
+
+def test_refuted_may_still_cite_a_failed_run(cstore):
+    """Unlike verified_correction, 'refuted' legitimately cites a failing/
+    contradicting run as its proof -- that's the whole point of refutation."""
+    ev, cs = cstore
+    (ev / "failed.json").write_bytes(b'{"cmd":"pytest","exit_code":1}')
+    rec = cs.submit({"claim": "X", "status": "refuted", "environment": {},
+                     "evidence": [make_evidence(ev, "failed.json")]})
+    assert rec["publishable"] is False  # refuted is never publishable, but not rejected
+
+
 def test_bad_status_and_missing_fields_rejected(cstore):
     ev, cs = cstore
     with pytest.raises(ValueError, match="invalid status"):
@@ -157,6 +179,39 @@ def test_kill_drill_detect_elect_absorb_degrade(tmp_path):
     assert ok, reason
 
 
+def test_hot_swap_after_kill_drill_routes_through_quarantined_rejoin(tmp_path):
+    """hot_swap() must not be a way to skip the documented quarantined-rejoin
+    guarantee: swapping a fresh occupant into a side that was just declared
+    dead and absorbed has to come back under quarantine, same as rejoin()."""
+    task = _task(subtask="concurrency", grounded="left")
+    env = _env(tmp_path, "grounded", "wrong_confident", task)
+    r = env.run_session(task, kill_side="right", kill_after_round=0)
+    assert r["failover"] is not None and r["failover"]["dead"] == ["right"]
+    assert not env.quarantine.active("right")  # not quarantined yet -- only absorbed
+
+    fresh_right = MockHemisphere("right-fresh", "grounded",
+                                 evidence_root=str(tmp_path / "env" / "evidence"))
+    env.hot_swap("right", fresh_right)
+
+    assert env.alive["right"] is True
+    assert env.occupants["right"].name == "right-fresh"
+    assert env.quarantine.active("right")  # rejoin-quarantined, not free authority
+    assert env.ledger.last("hot_swap")["payload"]["was_dead_or_absorbed"] is True
+    assert env.ledger.last("rejoin")["payload"]["hemi"] == "right"
+
+
+def test_hot_swap_of_live_occupant_is_not_quarantined(tmp_path):
+    """A hot swap that has nothing to do with a failure (occupant was never
+    dead or absorbed) must behave exactly as before -- no forced quarantine."""
+    task = _task()
+    env = _env(tmp_path, "grounded", "wrong_confident", task)
+    new_right = MockHemisphere("right-codex", "grounded",
+                               evidence_root=str(tmp_path / "env" / "evidence"))
+    env.hot_swap("right", new_right)
+    assert env.ledger.last("hot_swap")["payload"]["was_dead_or_absorbed"] is False
+    assert not env.quarantine.active("right")
+
+
 def test_checkpoint_contains_state(tmp_path):
     task = _task()
     env = _env(tmp_path, "grounded", "wrong_confident", task)
@@ -204,3 +259,16 @@ def test_eval_kill_drill_metrics_present(tmp_path):
     for row in report["tasks"]:
         assert row["E_failover"] is not None
         assert row["E_failover"]["detection_latency_s"] >= 0
+
+
+def test_eval_kill_drill_scores_the_survivor_not_a_hardcoded_side(tmp_path):
+    """demo_tasks()[:2] (t1/t2) always kill 'right', so E_kill_drill there can't
+    tell a correct survivor-scoring implementation from one hardcoded to check
+    'left' regardless of who actually survived. t4/t5 kill 'left' -- 'right' is
+    the grounded survivor and should be scored correct."""
+    tasks = [t for t in demo_tasks() if t["kill_side"] == "left"]
+    assert tasks and all(t["id"] in ("t4", "t5", "t6") for t in tasks)
+    report = run_eval(str(tmp_path / "eval4"), tasks)
+    for row in report["tasks"]:
+        assert row["E_failover"]["survivor"] == "right"
+        assert row["E_kill_drill"] == 1

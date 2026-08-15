@@ -143,6 +143,41 @@ def test_quarantined_authority_still_needs_evidence(rig):
     assert q._load()["left"] == 1
 
 
+def test_quarantine_credit_requires_novel_evidence(rig):
+    """A quarantined sender resubmitting the SAME evidence artifact repeatedly
+    must not fully self-release quarantine -- each credit has to come with
+    proof the sender hasn't already presented, or quarantine's 're-earn trust'
+    intent is meaningless (it'd be a fixed 'wait K messages' timer, not a
+    validated-evidence gate)."""
+    root, ev, ledger, cap, bus, q, bridge = rig
+    q.quarantine("left", 3, ledger, reason="contradicted by execution")
+    ref = make_evidence(ev, "proof.json")
+    for _ in range(5):
+        msg = make_msg("left", "right", "concurrency", "counterexample", "same proof again", evidence=[ref])
+        assert bridge.transmit(msg)["status"] == "delivered"
+    # 5 deliveries of the SAME artifact must earn at most 1 credit, not 5+.
+    assert q._load()["left"] == 2
+    assert q.active("left")
+
+
+def test_unrecognized_kind_rejected_not_delivered_unconditionally(rig):
+    """The bridge is documented as the sole inhibitory checkpoint -- it must
+    fail closed on a kind it doesn't recognize, not silently fall through to
+    the 'non-influence, always passes' branch (which is only correct because
+    make_msg() at the shipped call sites already rejects bad kinds; the
+    bridge itself shouldn't rely on that)."""
+    root, ev, ledger, cap, bus, q, bridge = rig
+    q.quarantine("left", 2, ledger, reason="test")
+    msg = dict(
+        msg_id="m1", sender="left", recipient="right", subtask="concurrency",
+        kind="objection ", body="trailing space makes this an unrecognized kind",
+        evidence=[], epoch=0,
+    )
+    res = bridge.transmit(msg)
+    assert res["status"] == "rejected" and res["reason"] == "unrecognized_kind"
+    assert _kinds(ledger, "bridge_rejected")
+
+
 def test_stale_epoch_fenced(rig):
     """Split-brain guard: falsely-dead hemisphere returns on the old epoch -> rejected."""
     root, ev, ledger, cap, bus, q, bridge = rig

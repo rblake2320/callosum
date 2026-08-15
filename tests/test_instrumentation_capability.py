@@ -60,6 +60,33 @@ def test_commits_are_sealed_in_ledger(tmp_path, led):
     assert led.verify()[0]
 
 
+def test_reveal_rejects_forged_ledger_entry(tmp_path, led):
+    """reveal() must verify the ledger before trusting entries() -- otherwise
+    an attacker with filesystem write access can append an unsigned/garbage
+    position_commit line and reveal() treats it as a legitimately sealed
+    independent commitment for a hemisphere that never actually committed."""
+    import json
+
+    t = PositionTracker(tmp_path, led)
+    t.commit_initial("left", "left's real independent answer")
+    atomic_write_json(
+        os.path.join(tmp_path, "positions", "right.json"),
+        {"text": "left's real independent answer", "sha256": "0" * 64},
+    )
+    # forged line: no valid hash chain, no valid signature, nothing the real
+    # signer produced -- just direct JSONL injection.
+    forged = {
+        "seq": 999999, "ts": 0, "kind": "position_commit",
+        "payload": {"hemi": "right", "sha256": "0" * 64},
+        "prev": "f" * 64, "hash": "0" * 64, "sig": "0" * 128, "signer": "0" * 64,
+    }
+    with open(led.path, "ab") as f:
+        f.write(json.dumps(forged).encode() + b"\n")
+
+    with pytest.raises(RuntimeError, match="ledger failed verification"):
+        t.reveal()
+
+
 # ------------------------------------------------------------ classification
 def test_evidence_change_classified_clean(tmp_path, led):
     t = PositionTracker(tmp_path, led)
@@ -155,3 +182,32 @@ def test_rebuild_refuses_tampered_ledger(tmp_path):
         fh.write(b"")
     with pytest.raises(RuntimeError, match="ledger failed verification"):
         c.rebuild_from_ledger()
+
+
+def test_rebuild_refuses_full_rewrite_by_different_signer(tmp_path):
+    """A bare ledger.verify() with no trusted set accepts any internally
+    self-consistent chain, even one wholesale-replaced by an attacker's own
+    freshly generated keypair (no access to the real private key needed).
+    rebuild_from_ledger() must pin verification to the envelope's own signer
+    or this full-file-rewrite forges authority undetected."""
+    real_signer = Signer.generate()
+    led = Ledger(tmp_path / "ledger", real_signer)
+    c = CapabilityMatrix(str(tmp_path / "cap.json"), led)
+    c.record_outcome("s", "left", "right")
+    c.record_outcome("s", "left", "right")
+    c.record_outcome("s", "left", "right")
+    assert c.authority("s") == "left"
+
+    attacker_dir = tmp_path / "attacker_ledger"
+    attacker_signer = Signer.generate()
+    forged = Ledger(attacker_dir, attacker_signer)
+    forged_matrix = CapabilityMatrix(str(tmp_path / "unused.json"), forged)
+    for _ in range(10):
+        forged_matrix.record_outcome("s", "right", "left")
+
+    ledger_dir = tmp_path / "ledger"
+    (ledger_dir / "ledger.jsonl").write_bytes((attacker_dir / "ledger.jsonl").read_bytes())
+    (ledger_dir / "HEAD.json").write_bytes((attacker_dir / "HEAD.json").read_bytes())
+
+    with pytest.raises(RuntimeError, match="ledger failed verification"):
+        CapabilityMatrix(str(tmp_path / "cap.json"), led).rebuild_from_ledger()

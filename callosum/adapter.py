@@ -25,7 +25,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 
-from .evidence import make_evidence
+from .evidence import ALL_KINDS, make_evidence
 from .util import atomic_write_bytes, canonical, read_json
 
 
@@ -140,9 +140,17 @@ class TerminalHemisphere(HemisphereAdapter):
                            canonical({"own_position": own_position, "inbox": inbox_msgs,
                                       "evidence_valid": ctx["evidence_valid"], "round": rnd}))
         rec = self._wait_for(os.path.join(self.dir, f"round_{rnd}_out.json"))
+        # rec is untrusted external input (a real CLI peer's file write, per
+        # PROTOCOL.md) -- a malformed draft here (wrong/missing key, typo'd
+        # "kind") must not crash the whole governed session with a raw
+        # KeyError/ValueError. Drop malformed drafts, same tolerance already
+        # given to torn/malformed JSON in _wait_for above.
+        out = [d for d in rec.get("out", [])
+               if isinstance(d, dict) and isinstance(d.get("kind"), str) and d["kind"] in ALL_KINDS
+               and isinstance(d.get("body"), str)]
         return {"position": rec.get("position", own_position),
                 "cause_msg_id": rec.get("cause_msg_id"),
-                "out": rec.get("out", [])}
+                "out": out}
 
     def checkpoint(self) -> dict:
         return {"terminal_dir": self.dir}

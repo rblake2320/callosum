@@ -82,16 +82,31 @@ class Quarantine:
     def active(self, hemi: str) -> bool:
         return self._load().get(hemi, 0) > 0
 
-    def credit(self, hemi: str, ledger=None) -> None:
-        """One valid-evidence delivery = one credit toward release."""
+    def credit(self, hemi: str, ledger=None, evidence_hashes: set[str] | None = None) -> None:
+        """One valid-evidence delivery = one credit toward release.
+
+        When evidence_hashes is given, the credit only counts if it contains
+        at least one sha256 not already credited for this hemi -- otherwise a
+        quarantined sender could resubmit the same evidence artifact
+        repeatedly and fully self-release without ever presenting new proof,
+        defeating the "re-earn trust" intent. evidence_hashes=None (the
+        default) skips novelty tracking, for callers with no evidence to
+        attribute the credit to.
+        """
         with FileLock(self.lock):
             d = self._load()
-            if d.get(hemi, 0) > 0:
-                d[hemi] -= 1
-                atomic_write_json(self.path, d)
-                released = d[hemi] == 0
-            else:
-                released = False
+            if d.get(hemi, 0) <= 0:
+                return
+            if evidence_hashes is not None:
+                seen_key = f"__seen_evidence_{hemi}"
+                seen = set(d.get(seen_key, []))
+                novel = evidence_hashes - seen
+                if not novel:
+                    return
+                d[seen_key] = sorted(seen | novel)
+            d[hemi] -= 1
+            atomic_write_json(self.path, d)
+            released = d[hemi] == 0
         if released and ledger is not None:
             ledger.append("quarantine_released", {"hemi": hemi})
 
@@ -106,6 +121,7 @@ class FailoverController:
         self.quarantine = quarantine
         self.hemis = list(hemis)
         self.state_path = os.path.join(self.root, "failover.json")
+        self.state_lock = self.state_path + ".lock"
 
     def _state(self) -> dict:
         return read_json(self.state_path) if os.path.exists(self.state_path) else {"handled": {}}
@@ -116,34 +132,40 @@ class FailoverController:
         alive = [h for h in self.hemis if h not in dead]
         if not dead or not alive:
             return None  # nothing dead, or everything dead (watchdog territory)
-        state = self._state()
-        dead = [d for d in dead if d not in state["handled"]]
-        if not dead:
-            return None
-        detect_ts = now
-        # capability-weighted election, not highest-ID
-        scores = {h: self.cap.priority_score(h) for h in alive}
-        survivor = max(alive, key=lambda h: scores[h])
-        epoch = bump_epoch(self.root)
-        self.ledger.append("election", {"dead": dead, "survivor": survivor, "scores": scores, "epoch": epoch})
-        unbacked_all = []
-        for d in dead:
-            unbacked_all += self.cap.absorb(d, survivor)
-            state["handled"][d] = epoch
-        degraded = {
-            "active": True,
-            "evidence_required_all": True,
-            "checkpoint_interval_scale": 0.5,
-            "autonomy": "reduced",
-            "unbacked": sorted(set(unbacked_all)),
-            "epoch": epoch,
-            "reason": f"hemisphere(s) {dead} lost",
-        }
-        atomic_write_json(os.path.join(self.root, "degraded.json"), degraded)
-        atomic_write_json(self.state_path, state)
-        self.ledger.append("degraded_mode", degraded)
-        return {"dead": dead, "survivor": survivor, "epoch": epoch,
-                "unbacked": degraded["unbacked"], "detect_ts": detect_ts, "scores": scores}
+        # The dead-check-then-write below is a single read-modify-write that
+        # must be atomic across concurrent controller instances (e.g. a
+        # supervisor and a manual kill_drill racing the same death), or each
+        # one observes "not yet handled" and independently elects, minting a
+        # separate epoch per caller instead of one epoch per real event.
+        with FileLock(self.state_lock):
+            state = self._state()
+            dead = [d for d in dead if d not in state["handled"]]
+            if not dead:
+                return None
+            detect_ts = now
+            # capability-weighted election, not highest-ID
+            scores = {h: self.cap.priority_score(h) for h in alive}
+            survivor = max(alive, key=lambda h: scores[h])
+            epoch = bump_epoch(self.root)
+            self.ledger.append("election", {"dead": dead, "survivor": survivor, "scores": scores, "epoch": epoch})
+            unbacked_all = []
+            for d in dead:
+                unbacked_all += self.cap.absorb(d, survivor)
+                state["handled"][d] = epoch
+            degraded = {
+                "active": True,
+                "evidence_required_all": True,
+                "checkpoint_interval_scale": 0.5,
+                "autonomy": "reduced",
+                "unbacked": sorted(set(unbacked_all)),
+                "epoch": epoch,
+                "reason": f"hemisphere(s) {dead} lost",
+            }
+            atomic_write_json(os.path.join(self.root, "degraded.json"), degraded)
+            atomic_write_json(self.state_path, state)
+            self.ledger.append("degraded_mode", degraded)
+            return {"dead": dead, "survivor": survivor, "epoch": epoch,
+                    "unbacked": degraded["unbacked"], "detect_ts": detect_ts, "scores": scores}
 
     def rejoin(self, hemi: str, k: int = 3) -> int:
         """A falsely-dead hemisphere returns as a quarantined follower on the new epoch."""
