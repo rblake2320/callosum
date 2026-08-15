@@ -160,6 +160,29 @@ def test_quarantine_credit_requires_novel_evidence(rig):
     assert q.active("left")
 
 
+def test_quarantine_novelty_tracking_does_not_outlive_its_term(rig):
+    """Evidence-novelty tracking for credit() must be scoped to the CURRENT
+    quarantine term, not accumulate forever. Otherwise a hemisphere that
+    legitimately re-cites the same real artifact from a past, resolved
+    incident -- in a brand new, unrelated quarantine term -- gets starved of
+    credit it has earned all over again."""
+    root, ev, ledger, cap, bus, q, bridge = rig
+    ref = make_evidence(ev, "proof.json")
+
+    # First term: earn a credit citing `ref`, then let the term end (released).
+    q.quarantine("left", 1, ledger, reason="first incident")
+    msg1 = make_msg("left", "right", "concurrency", "counterexample", "proof", evidence=[ref])
+    assert bridge.transmit(msg1)["status"] == "delivered"
+    assert not q.active("left")  # released after 1 credit
+
+    # Second, unrelated term: citing the SAME artifact again must still count,
+    # because it's the first citation of THIS term, not a replay within it.
+    q.quarantine("left", 1, ledger, reason="second, unrelated incident")
+    msg2 = make_msg("left", "right", "concurrency", "counterexample", "proof", evidence=[ref])
+    assert bridge.transmit(msg2)["status"] == "delivered"
+    assert not q.active("left")  # released again -- not starved by term 1's history
+
+
 def test_unrecognized_kind_rejected_not_delivered_unconditionally(rig):
     """The bridge is documented as the sole inhibitory checkpoint -- it must
     fail closed on a kind it doesn't recognize, not silently fall through to

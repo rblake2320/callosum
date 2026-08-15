@@ -75,6 +75,12 @@ class Quarantine:
         with FileLock(self.lock):
             d = self._load()
             d[hemi] = k
+            # A fresh quarantine term is a clean slate for evidence novelty:
+            # without this, a hemisphere quarantined again later for an
+            # unrelated incident could legitimately re-cite an artifact it
+            # already used to earn a credit in a PRIOR term and be refused --
+            # novelty tracking must not outlive the term it was earned in.
+            d.pop(f"__seen_evidence_{hemi}", None)
             atomic_write_json(self.path, d)
         if ledger is not None:
             ledger.append("quarantine", {"hemi": hemi, "k": k, "reason": reason})

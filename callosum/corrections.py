@@ -51,20 +51,26 @@ class CorrectionStore:
                     raise ValueError(f"evidence rejected ({r.get('path')}): {reason}")
                 # validate_ref only binds the ref to a real, unmodified artifact
                 # (sha256 + jail) -- it says nothing about what happened when the
-                # artifact's command ran. Per evidence.py, a test-run record is
-                # {cmd, exit_code, output_sha256}; a 'verified_correction' whose
-                # own cited proof records a failing run (exit_code != 0) is not
-                # actually verified and must not be marked publishable.
+                # artifact's command ran. There is no etype taxonomy in evidence.py
+                # to scope this by (every ref today is etype="artifact"), so we
+                # positive-match the documented test-run-record shape instead of
+                # triggering on "exit_code" alone: {cmd, exit_code, ...} together,
+                # not either key in isolation, to avoid misfiring on some other
+                # artifact kind that happens to carry an unrelated "exit_code"
+                # field. A 'verified_correction' whose own cited proof records a
+                # failing run (exit_code != 0) is not actually verified and must
+                # not be marked publishable.
                 if pkg["status"] == "verified_correction":
                     try:
                         with open(os.path.join(self.evidence_root, r["path"]), "rb") as ef:
                             content = json.loads(ef.read())
                     except (json.JSONDecodeError, OSError):
                         content = None
-                    if isinstance(content, dict) and content.get("exit_code") not in (None, 0):
+                    is_test_run_record = isinstance(content, dict) and "cmd" in content and "exit_code" in content
+                    if is_test_run_record and content["exit_code"] not in (None, 0):
                         raise ValueError(
                             f"evidence rejected ({r.get('path')}): cited run failed "
-                            f"(exit_code={content.get('exit_code')}), cannot verify a correction with it"
+                            f"(exit_code={content['exit_code']}), cannot verify a correction with it"
                         )
         rec = dict(
             pkg,

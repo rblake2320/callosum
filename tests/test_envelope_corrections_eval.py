@@ -91,6 +91,19 @@ def test_verified_correction_with_failed_run_evidence_rejected(cstore):
                    "evidence": [make_evidence(ev, "failed.json")]})
 
 
+def test_verified_correction_ignores_unrelated_exit_code_field(cstore):
+    """There is no etype taxonomy in evidence.py (every ref is etype="artifact")
+    to scope the failed-run check by. A non-test-run artifact that merely
+    happens to have a field named "exit_code" for an unrelated reason -- with
+    no "cmd" alongside it, so it doesn't match the documented test-run-record
+    shape -- must not be misfired on and rejected."""
+    ev, cs = cstore
+    (ev / "not_a_test_run.json").write_bytes(b'{"exit_code": "N/A", "kind": "log_capture"}')
+    rec = cs.submit({"claim": "X", "status": "verified_correction", "environment": {},
+                     "evidence": [make_evidence(ev, "not_a_test_run.json")]})
+    assert rec["publishable"] is True
+
+
 def test_refuted_may_still_cite_a_failed_run(cstore):
     """Unlike verified_correction, 'refuted' legitimately cites a failing/
     contradicting run as its proof -- that's the whole point of refutation."""
