@@ -57,7 +57,8 @@ class CorrectionStore:
                 # actually verified and must not be marked publishable.
                 if pkg["status"] == "verified_correction":
                     try:
-                        content = json.loads(open(os.path.join(self.evidence_root, r["path"]), "rb").read())
+                        with open(os.path.join(self.evidence_root, r["path"]), "rb") as ef:
+                            content = json.loads(ef.read())
                     except (json.JSONDecodeError, OSError):
                         content = None
                     if isinstance(content, dict) and content.get("exit_code") not in (None, 0):
