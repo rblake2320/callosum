@@ -6,8 +6,14 @@ cryptographically sealed, **inhibitory, evidence-gated bridge** — the corpus
 callosum — governs everything that crosses between them. The bridge is the
 invention; the models are replaceable organs.
 
-**Private personal IP (Ron Blake).** See `docs/CLAIM_SEEDS.md`. Do not publish,
-demo publicly, or reference in outreach before the covering provisional is filed.
+**Private personal IP (Ron Blake).** See `LICENSE` and `docs/CLAIM_SEEDS.md`. Do
+not publish, demo publicly, or reference in outreach before the covering
+provisional is filed.
+
+> **Repository visibility is part of that standing order.** `docs/CLAIM_SEEDS.md`
+> is unfiled provisional claim language. Hosting it in a repository that anyone
+> can view is itself a public disclosure, regardless of what the file's header
+> says. Confirm this repo is **Private** before pushing anything further.
 
 ## What it enforces
 
@@ -29,14 +35,25 @@ demo publicly, or reference in outreach before the covering provisional is filed
 
 ```powershell
 pip install -e .[dev]
-pytest -q                      # 70 tests
+pytest -q                      # 89 tests
 python scripts\run_eval.py     # five-config eval on demo tasks
 python scripts\kill_drill.py   # detect -> elect -> absorb -> degrade -> fence
 ```
 
-Wire real terminals: create an envelope with two `TerminalHemisphere` adapters,
-open Claude Code in `terminals/left` and Codex CLI in `terminals/right`, and
-paste each agent `PROTOCOL.md`. Agents speak via `callosum post/beat/status/verify`.
+Wire real terminals:
+
+```powershell
+callosum init --root C:\envelopes\demo     # identity key + evidence jail + terminal dirs
+```
+
+Then open Claude Code in `<ROOT>\terminals\left` and Codex CLI in
+`<ROOT>\terminals\right`, paste each agent `PROTOCOL.md`, and start their
+heartbeats. Agents speak via `callosum post/beat/status/verify`. For a scripted
+envelope instead, construct `BrainEnvelope` with two `TerminalHemisphere`
+adapters directly.
+
+`SECURITY.md` states the trust boundaries, the adversary model, and — more
+usefully — the five things this system explicitly does **not** guarantee.
 
 ## Five-configuration eval
 
@@ -47,7 +64,7 @@ harder — expect smaller or zero on synthetic mocks). Demo output: D=1.0 vs bes
 single 0.5 (+50pp), sycophancy 0.0, detection latency ≈0.23s at a 0.15s budget.
 Mocks expose perfect `evidence_for`, which flatters config C; real models won't.
 
-## Test map (70 tests, all adversarial-first)
+## Test map (89 tests, all adversarial-first)
 
 | Suite | n | Proves |
 |---|---|---|
@@ -57,6 +74,7 @@ Mocks expose perfect `evidence_for`, which flatters config C; real models won't.
 | `test_instrumentation_capability.py` | 14 | reveal blocked pre-commit, commit tamper, sycophancy classification/ratio, tripwire, authority flips, tie ⇒ nobody inhibits, matrix poisoning defeated by ledger rebuild, rebuild refuses tampered chain |
 | `test_failover_watchdog.py` | 11 | detection within budget, capability-weighted election, degraded + unbacked, idempotent election, both-dead ⇒ watchdog, quarantined rejoin, watchdog halt/stand-down, exactly-once bus, torn in-flight tolerance |
 | `test_envelope_corrections_eval.py` | 15 | correction gate (5), full session evidence-correction e2e, sycophant flagged, session tripwire, hot-swap identity+memory, kill drill e2e, checkpoint, HALT blocks sessions, eval report semantics (3) |
+| `test_hardening_regressions.py` | 19 | forged-forward epoch fenced, attacker-resigned chain refused by rebuild, faithful absorb replay (incl. legacy entries), capability read-modify-write under lock (4 procs x 25, zero lost), ledger crash windows vs truncation (4), key 0600 at rest (3), delivered evidence sha sealed, corrections lock + line integrity |
 
 ## Windows-first notes
 
@@ -64,8 +82,10 @@ Mocks expose perfect `evidence_for`, which flatters config C; real models won't.
   (the CRT retries it 10×/1s internally, making timeouts non-deterministic).
 - Atomic writes: tmp + fsync + `os.replace` (atomic on NTFS). All JSON is written
   as bytes — no newline translation, CRLF-safe by construction.
-- Identity key: `Signer.save(path, use_dpapi=True)` wraps with DPAPI
-  (`CryptProtectData`, CURRENT_USER). POSIX fallback: chmod 600.
+- Identity key: `Signer.save()` defaults to protect-if-possible — DPAPI
+  (`CryptProtectData`, CURRENT_USER) on Windows, `O_EXCL` 0600 on POSIX. Pass
+  `use_dpapi=False` to opt out. (Through v0.1.0 this defaulted to *off*, so the
+  runtime never took the DPAPI path the docs advertised.)
 - Linux deltas: `flock` instead of `msvcrt`; directory fsync after replace
   (skipped on Windows where it is unsupported/unneeded).
 
@@ -76,8 +96,14 @@ Mocks expose perfect `evidence_for`, which flatters config C; real models won't.
   after review.
 - **`stale_epoch` rejections** → an election happened while the sender was
   presumed dead. `FailoverController.rejoin(side)` re-admits it quarantined.
+- **`future_epoch` rejections** → the sender stamped an epoch ahead of
+  `epoch.json`. The fence is strict equality; epochs are envelope-assigned, so
+  this means a stale process, a hand-edited message, or a forgery attempt.
 - **`verify` fails with HEAD mismatch** → tail truncation or rollback. Restore
   from backup; the chain will not self-heal by design.
+- **`verify` says "uncommitted tail recovered"** → not tamper. The anchor update
+  was lost to a crash while the entries themselves landed intact and signed.
+  This path requires a pinned signer set, which `callosum verify` always passes.
 - **Watchdog HALT** → no verified progress within `t_safe`. Inspect the ledger
   tail, then `Watchdog.clear()`.
 - **TerminalHemisphere timeout** → the CLI agent didn't write

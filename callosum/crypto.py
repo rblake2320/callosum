@@ -20,11 +20,11 @@ class Signer:
         self._pub_hex = priv.public_key().public_bytes_raw().hex()
 
     @classmethod
-    def generate(cls) -> "Signer":
+    def generate(cls) -> Signer:
         return cls(Ed25519PrivateKey.generate())
 
     @classmethod
-    def load(cls, path) -> "Signer":
+    def load(cls, path) -> Signer:
         with open(path, "rb") as f:
             raw = f.read()
         if raw[:4] == b"DPAP":  # pragma: no cover - windows only
@@ -33,17 +33,37 @@ class Signer:
             raw = bytes.fromhex(raw.decode("ascii").strip())
         return cls(Ed25519PrivateKey.from_private_bytes(raw))
 
-    def save(self, path, use_dpapi: bool = False) -> None:
+    def save(self, path, use_dpapi: bool | None = None) -> None:
+        """Persist the envelope key.
+
+        `use_dpapi=None` (the default) means "protect it if the platform can":
+        DPAPI-wrapped on Windows, 0600 on POSIX. It used to default to False,
+        so every BrainEnvelope wrote a bare hex private key to disk while the
+        README advertised DPAPI wrapping -- the documented hardening was never
+        on the runtime path. Pass False explicitly to opt out.
+
+        POSIX mode is set at create time via O_EXCL|0600, not chmod'd after the
+        bytes are already on disk with the ambient umask.
+        """
+        if use_dpapi is None:
+            use_dpapi = os.name == "nt"
         raw = self._priv.private_bytes_raw()
         if use_dpapi and os.name == "nt":  # pragma: no cover - windows only
-            blob = b"DPAP" + dpapi_protect(raw)
-            with open(path, "wb") as f:
-                f.write(blob)
+            payload = b"DPAP" + dpapi_protect(raw)
         else:
+            payload = raw.hex().encode("ascii")
+        path = os.fspath(path)
+        if os.name != "nt":
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            fd = os.open(path, flags, 0o600)
+            try:
+                os.write(fd, payload)
+            finally:
+                os.close(fd)
+            os.chmod(path, 0o600)  # idempotent when the file pre-existed
+        else:  # pragma: no cover - windows only
             with open(path, "wb") as f:
-                f.write(raw.hex().encode("ascii"))
-            if os.name != "nt":
-                os.chmod(path, 0o600)
+                f.write(payload)
 
     @property
     def pub_hex(self) -> str:

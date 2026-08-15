@@ -44,8 +44,8 @@ class HemisphereAdapter(ABC):
     def checkpoint(self) -> dict:
         return {}
 
-    def restore(self, state: dict) -> None:
-        pass
+    def restore(self, state: dict) -> None:  # noqa: B027 - optional hook, no-op by design
+        """Occupant-local state restore. Optional: envelope memory lives above."""
 
 
 class MockHemisphere(HemisphereAdapter):

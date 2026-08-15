@@ -1,7 +1,10 @@
 """The callosum: an INHIBITORY, evidence-gated bridge -- not a pipe.
 
 Transmission rules (in order):
-  1. Epoch fence: msg.epoch < current epoch -> REJECTED (split-brain guard).
+  1. Epoch fence: msg.epoch != current epoch -> REJECTED (split-brain guard).
+     Equality, not `<`. A `<` test fences only honest stragglers: a fenced
+     hemisphere could stamp an arbitrarily high epoch and walk straight through
+     the guard. Epochs are envelope-assigned, so any deviation is illegitimate.
   2. Non-influence kinds (status, position) always pass, logged.
   3. Quarantined sender: ALL influence requires valid evidence, authority or not.
   4. Authority holder on the subtask: influence passes without evidence (logged,
@@ -48,11 +51,14 @@ class Callosum:
             "msg_id": msg["msg_id"], "sender": msg["sender"], "recipient": msg["recipient"],
             "subtask": msg["subtask"], "kind": msg["kind"],
         }
-        # 1. epoch fence
+        # 1. epoch fence (equality: a forged-forward epoch must not bypass the guard)
         current = get_epoch(self.root)
-        if msg.get("epoch", 0) < current:
-            self.ledger.append("bridge_rejected", dict(base, reason=f"stale epoch {msg.get('epoch')} < {current}"))
-            return {"status": "rejected", "reason": "stale_epoch", "evidence_valid": False}
+        sent = msg.get("epoch", 0)
+        if sent != current:
+            reason = "stale_epoch" if sent < current else "future_epoch"
+            self.ledger.append("bridge_rejected",
+                               dict(base, reason=f"{reason}: msg epoch {sent} != current {current}"))
+            return {"status": "rejected", "reason": reason, "evidence_valid": False}
 
         influence = msg["kind"] in INFLUENCE_KINDS
         ev_ok, ev_details = (validate_msg_evidence(msg, self.evidence_root)
@@ -61,6 +67,7 @@ class Callosum:
         # 2. non-influence always passes
         if not influence:
             return self._deliver(msg, base, ev_ok, note="non-influence")
+
 
         quarantined = bool(self.quarantine and self.quarantine.active(msg["sender"]))
         authority = self.cap.authority(msg["subtask"])
@@ -88,5 +95,15 @@ class Callosum:
     def _deliver(self, msg: dict, base: dict, ev_ok: bool, note: str) -> dict:
         self.bus.post(msg["recipient"], msg)
         self.delivered_evidence[msg["msg_id"]] = ev_ok
-        self.ledger.append("bridge_delivered", dict(base, evidence_valid=ev_ok, note=note))
+        # Seal WHICH artifact bought the crossing, not merely that one did.
+        # Suppressions already recorded their evidence detail; deliveries did
+        # not, so a delivered influence message could not be re-adjudicated
+        # from the chain after the fact. Claim seed 1(e) needs both sides.
+        self.ledger.append("bridge_delivered", dict(
+            base,
+            evidence_valid=ev_ok,
+            note=note,
+            evidence=[{"path": r.get("path"), "sha256": r.get("sha256"), "etype": r.get("etype")}
+                      for r in msg.get("evidence", [])],
+        ))
         return {"status": "delivered", "reason": note, "evidence_valid": ev_ok}

@@ -1,4 +1,43 @@
+# --- build / tooling -------------------------------------------------------
 __pycache__/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 build/
+dist/
+.venv/
+venv/
+.env
+
+# --- SECRETS: never commit envelope identity material ----------------------
+# BrainEnvelope writes identity.key into its root. If an envelope is ever rooted
+# inside this checkout, an unguarded .gitignore publishes the Ed25519 private
+# key that the entire ledger's tamper-evidence depends on.
+identity.key
+*.key
+*.pem
+
+# --- envelope runtime state ------------------------------------------------
+# Session artifacts are evidence, not source. They also embed absolute paths and
+# whatever the occupants were reasoning about.
+ledger/
+evidence/
+corrections/
+positions/
+terminals/
+bus/
+hb/
+HALT
+HEAD.json
+capability.json
+degraded.json
+epoch.json
+failover.json
+memory.json
+progress.json
+quarantine.json
+eval_report.json
+*.lock
+callosum_eval_*/
+callosum_drill_*/

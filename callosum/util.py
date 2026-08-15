@@ -81,7 +81,7 @@ if os.name == "nt":  # pragma: no cover - exercised on Windows only
 
         def acquire(self):
             deadline = time.monotonic() + self.timeout
-            self._f = open(self.path, "a+b")
+            self._f = open(self.path, "a+b")  # noqa: SIM115 - the lock owns this handle for its lifetime
             if self._f.tell() == 0:
                 self._f.write(b"\0")
                 self._f.flush()
@@ -90,11 +90,11 @@ if os.name == "nt":  # pragma: no cover - exercised on Windows only
                     self._f.seek(0)
                     msvcrt.locking(self._f.fileno(), msvcrt.LK_NBLCK, 1)
                     return self
-                except OSError:
+                except OSError as exc:
                     if time.monotonic() > deadline:
                         self._f.close()
                         self._f = None
-                        raise TimeoutError(f"lock timeout: {self.path}")
+                        raise TimeoutError(f"lock timeout: {self.path}") from exc
                     time.sleep(self.poll)
 
         def release(self):
@@ -126,16 +126,16 @@ else:
 
         def acquire(self):
             deadline = time.monotonic() + self.timeout
-            self._f = open(self.path, "a+b")
+            self._f = open(self.path, "a+b")  # noqa: SIM115 - the lock owns this handle for its lifetime
             while True:
                 try:
                     fcntl.flock(self._f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     return self
-                except OSError:
+                except OSError as exc:
                     if time.monotonic() > deadline:
                         self._f.close()
                         self._f = None
-                        raise TimeoutError(f"lock timeout: {self.path}")
+                        raise TimeoutError(f"lock timeout: {self.path}") from exc
                     time.sleep(self.poll)
 
         def release(self):

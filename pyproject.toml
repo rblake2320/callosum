@@ -4,16 +4,61 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "callosum"
-version = "0.1.0"
+version = "0.1.1"
 description = "Governed dual-hemisphere brain harness: inhibitory evidence-gated bridge, plasticity failover, sealed ledger"
+readme = "README.md"
 requires-python = ">=3.10"
+authors = [{ name = "Ron Blake" }]
+license = { file = "LICENSE" }
+keywords = ["multi-agent", "governance", "provenance", "tamper-evident", "ed25519"]
+classifiers = [
+  "Private :: Do Not Upload",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+]
 dependencies = ["cryptography>=42"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
 callosum = "callosum.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["callosum*"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# -ra surfaces skips: the Windows-only locking tests must not silently vanish
+# from a Linux run and read as full coverage.
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+# Pragmatic baseline that passes clean today, so a red CI always means a real
+# regression rather than pre-existing style debt. Widen deliberately.
+select = ["E", "F", "W", "I", "UP", "C4", "B", "SIM", "RUF"]
+ignore = [
+  "E501",    # width is enforced by line-length; double-reporting is noise
+  "B008",
+  "SIM105",
+  "SIM108",  # explicit if/else reads better than a wrapped ternary here
+  "RUF059",  # unpacked-but-unused is idiomatic in the fixtures here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Deliberate re-export surface, not dead imports.
+"callosum/__init__.py" = ["F401"]
+# Adversarial tests build on assert and construct odd shapes on purpose.
+"tests/*" = ["S101", "B", "SIM", "E741", "F841", "E702", "E401"]
+# Drill scripts are terse single-file entry points by design.
+"scripts/*" = ["E401", "E402", "E702"]

@@ -9,6 +9,18 @@ UNBACKED so degraded mode knows exactly which guarantees are currently missing.
 Outcome writes go through the ledger (kind='capability_outcome') so the matrix
 is reconstructible and poisoning is tamper-evident: rebuild() ignores anything
 not present in a verified chain.
+
+Three integrity rules this module must hold, each with a regression test:
+
+1. Read-modify-write happens INSIDE the lock. `self.data` loaded at construction
+   is a cache, not the truth; two live handles mutating from stale caches used
+   to silently drop outcomes even though the write itself was locked.
+2. rebuild() pins the signer. Verifying a chain without `trusted_pubs` accepts a
+   chain an attacker re-signed end-to-end with their own key -- which is exactly
+   the poisoning rebuild() exists to defeat.
+3. Replay is faithful. absorb() reassigns only the subtasks the dead side (or
+   nobody) held; replay must apply that same recorded map, not blanket-assign
+   every subtask to the survivor.
 """
 from __future__ import annotations
 
@@ -18,24 +30,37 @@ from .util import FileLock, atomic_write_json, read_json
 
 
 class CapabilityMatrix:
-    def __init__(self, path, ledger=None):
+    def __init__(self, path, ledger=None, trusted_pubs: set[str] | None = None):
         self.path = os.fspath(path)
         self.lock_path = self.path + ".lock"
         self.ledger = ledger
-        self.data = read_json(self.path) if os.path.exists(self.path) else {
-            "subtasks": {}, "reassigned": {}, "unbacked": []
-        }
+        self.trusted_pubs = trusted_pubs
+        self.data = self._load()
+
+    def _load(self) -> dict:
+        if not os.path.exists(self.path):
+            return {"subtasks": {}, "reassigned": {}, "unbacked": []}
+        d = read_json(self.path)
+        d.setdefault("subtasks", {})
+        d.setdefault("reassigned", {})
+        d.setdefault("unbacked", [])
+        return d
 
     # ------------------------------------------------------------------ write
+    @staticmethod
+    def _tally(data: dict, subtask: str, winner: str, loser: str | None) -> None:
+        st = data["subtasks"].setdefault(subtask, {})
+        st[winner] = st.get(winner, {"wins": 0, "total": 0})
+        st[winner]["wins"] += 1
+        st[winner]["total"] += 1
+        if loser:
+            st[loser] = st.get(loser, {"wins": 0, "total": 0})
+            st[loser]["total"] += 1
+
     def record_outcome(self, subtask: str, winner: str, loser: str | None = None) -> None:
         with FileLock(self.lock_path):
-            st = self.data["subtasks"].setdefault(subtask, {})
-            st[winner] = st.get(winner, {"wins": 0, "total": 0})
-            st[winner]["wins"] += 1
-            st[winner]["total"] += 1
-            if loser:
-                st[loser] = st.get(loser, {"wins": 0, "total": 0})
-                st[loser]["total"] += 1
+            self.data = self._load()  # refresh under the lock: no lost updates
+            self._tally(self.data, subtask, winner, loser)
             atomic_write_json(self.path, self.data)
         if self.ledger is not None:
             self.ledger.append("capability_outcome", {"subtask": subtask, "winner": winner, "loser": loser})
@@ -66,42 +91,69 @@ class CapabilityMatrix:
 
     # ------------------------------------------------------------- plasticity
     def absorb(self, dead: str, survivor: str, margin: float = 0.15) -> list:
-        """Reassign the dead hemisphere's authorities to the survivor; flag unbacked."""
+        """Reassign the dead hemisphere's authorities to the survivor; flag unbacked.
+
+        The exact reassignment map is sealed to the ledger so replay reproduces
+        this state rather than approximating it.
+        """
         unbacked = []
         with FileLock(self.lock_path):
+            self.data = self._load()  # refresh under the lock
+            reassigned = {}
             for subtask in self.data["subtasks"]:
                 if self.authority(subtask) in (dead, None):
-                    self.data["reassigned"][subtask] = survivor
+                    reassigned[subtask] = survivor
                 if self.win_rate(subtask, dead) - self.win_rate(subtask, survivor) >= margin:
                     unbacked.append(subtask)
+            self.data["reassigned"].update(reassigned)
             self.data["unbacked"] = sorted(set(self.data["unbacked"]) | set(unbacked))
             atomic_write_json(self.path, self.data)
         if self.ledger is not None:
-            self.ledger.append("capability_absorb", {"dead": dead, "survivor": survivor, "unbacked": unbacked})
+            self.ledger.append("capability_absorb", {
+                "dead": dead, "survivor": survivor,
+                "unbacked": unbacked, "reassigned": reassigned,
+            })
         return unbacked
 
-    def rebuild_from_ledger(self) -> "CapabilityMatrix":
-        """Discard file state; replay only verified ledger outcomes (anti-poisoning)."""
+    def rebuild_from_ledger(self, trusted_pubs: set[str] | None = None) -> CapabilityMatrix:
+        """Discard file state; replay only verified ledger outcomes (anti-poisoning).
+
+        The chain is verified against a PINNED signer set -- by default the
+        envelope key bound to this ledger. Without pinning, a chain re-signed
+        end-to-end by an attacker verifies cleanly and rebuild becomes a
+        poisoning vector instead of the defense against one.
+        """
         if self.ledger is None:
             raise RuntimeError("no ledger bound")
-        ok, reason = self.ledger.verify()
+        pubs = trusted_pubs or self.trusted_pubs
+        if pubs is None:
+            signer = getattr(self.ledger, "signer", None)
+            pub = getattr(signer, "pub_hex", None)
+            if not pub:
+                raise RuntimeError("rebuild requires a trusted signer set; none could be inferred")
+            pubs = {pub}
+        ok, reason = self.ledger.verify(trusted_pubs=set(pubs))
         if not ok:
             raise RuntimeError(f"ledger failed verification: {reason}")
-        self.data = {"subtasks": {}, "reassigned": {}, "unbacked": []}
+
+        data = {"subtasks": {}, "reassigned": {}, "unbacked": []}
         for e in self.ledger.entries():
             if e["kind"] == "capability_outcome":
                 p = e["payload"]
-                st = self.data["subtasks"].setdefault(p["subtask"], {})
-                st[p["winner"]] = st.get(p["winner"], {"wins": 0, "total": 0})
-                st[p["winner"]]["wins"] += 1
-                st[p["winner"]]["total"] += 1
-                if p.get("loser"):
-                    st[p["loser"]] = st.get(p["loser"], {"wins": 0, "total": 0})
-                    st[p["loser"]]["total"] += 1
+                self._tally(data, p["subtask"], p["winner"], p.get("loser"))
             elif e["kind"] == "capability_absorb":
                 p = e["payload"]
-                for subtask in self.data["subtasks"]:
-                    self.data["reassigned"][subtask] = p["survivor"]
-                self.data["unbacked"] = sorted(set(self.data["unbacked"]) | set(p["unbacked"]))
-        atomic_write_json(self.path, self.data)
+                recorded = p.get("reassigned")
+                if recorded is None:
+                    # legacy entry (written before the map was sealed): recompute
+                    # the map from replay state rather than blanket-assigning.
+                    scratch = CapabilityMatrix.__new__(CapabilityMatrix)
+                    scratch.data = data
+                    recorded = {s: p["survivor"] for s in data["subtasks"]
+                                if scratch.authority(s) in (p["dead"], None)}
+                data["reassigned"].update(recorded)
+                data["unbacked"] = sorted(set(data["unbacked"]) | set(p["unbacked"]))
+        self.data = data
+        with FileLock(self.lock_path):
+            atomic_write_json(self.path, self.data)
         return self

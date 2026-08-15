@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Run the five-configuration eval on the built-in demo tasks and print the report."""
-import json, os, sys, tempfile
+import json
+import os
+import sys
+import tempfile
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from callosum.eval import demo_tasks, run_eval
 

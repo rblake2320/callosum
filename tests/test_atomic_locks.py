@@ -53,18 +53,22 @@ def test_crlf_bytes_preserved(tmp_path):
 def _locked_increment(lock_path, counter_path, n):
     for _ in range(n):
         with FileLock(lock_path, timeout=30):
-            v = int(open(counter_path).read())
-            open(counter_path, "w").write(str(v + 1))
+            with open(counter_path) as fh:
+                v = int(fh.read())
+            with open(counter_path, "w") as fh:
+                fh.write(str(v + 1))
 
 
 def test_cross_process_mutual_exclusion(tmp_path):
     lock_path = str(tmp_path / "l.lock")
     counter = str(tmp_path / "c.txt")
-    open(counter, "w").write("0")
+    with open(counter, "w") as fh:
+        fh.write("0")
     procs = [mp.Process(target=_locked_increment, args=(lock_path, counter, 50)) for _ in range(4)]
     [pr.start() for pr in procs]
     [pr.join() for pr in procs]
-    assert int(open(counter).read()) == 200  # zero lost updates
+    with open(counter) as fh:
+        assert int(fh.read()) == 200  # zero lost updates
 
 
 def _hold(lock_path, hold_evt, done_evt):

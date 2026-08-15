@@ -18,7 +18,7 @@ import time
 import uuid
 
 from .evidence import validate_ref
-from .util import canonical
+from .util import FileLock, canonical
 
 STATUSES = {"model_disagreement", "collaborative_agreement", "verified_correction", "refuted"}
 EVIDENCE_REQUIRED = {"verified_correction", "refuted"}
@@ -31,6 +31,7 @@ class CorrectionStore:
         self.dir = os.path.join(os.fspath(root), "corrections")
         os.makedirs(self.dir, exist_ok=True)
         self.path = os.path.join(self.dir, "corrections.jsonl")
+        self.lock_path = self.path + ".lock"
         self.ledger = ledger
         self.evidence_root = os.fspath(evidence_root)
 
@@ -56,7 +57,10 @@ class CorrectionStore:
             confidence="verified-in-specified-environment" if pkg["status"] in EVIDENCE_REQUIRED else "unverified",
             revision=pkg.get("revision", 1),
         )
-        with open(self.path, "ab") as f:
+        # Same cross-process discipline as the ledger: an unlocked "ab" append is
+        # not atomic across processes on Windows, and this corpus is meant to be
+        # provenance-clean by construction.
+        with FileLock(self.lock_path), open(self.path, "ab") as f:
             f.write(canonical(rec) + b"\n")
             f.flush()
             os.fsync(f.fileno())
@@ -67,7 +71,7 @@ class CorrectionStore:
         if not os.path.exists(self.path):
             return []
         with open(self.path, "rb") as f:
-            return [json.loads(l) for l in f.read().splitlines() if l.strip()]
+            return [json.loads(ln) for ln in f.read().splitlines() if ln.strip()]
 
     def publishable(self) -> list:
         return [r for r in self.all() if r.get("publishable")]

@@ -149,7 +149,9 @@ def test_rebuild_refuses_tampered_ledger(tmp_path):
     c = CapabilityMatrix(str(tmp_path / "cap.json"), led)
     c.record_outcome("s", "left")
     # truncate the tail
-    lines = open(led.path, "rb").read().splitlines()
-    open(led.path, "wb").write(b"")
+    with open(led.path, "rb") as fh:
+        lines = fh.read().splitlines()
+    with open(led.path, "wb") as fh:
+        fh.write(b"")
     with pytest.raises(RuntimeError, match="ledger failed verification"):
         c.rebuild_from_ledger()

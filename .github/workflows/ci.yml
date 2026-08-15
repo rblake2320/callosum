@@ -1,0 +1,125 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Windows first: this codebase's locking and atomic-write behaviour is
+    # msvcrt/NTFS-specific and cannot be validated on Linux alone.
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Test suite (adversarial-first)
+        run: pytest -q --junitxml=junit-${{ matrix.os }}-${{ matrix.python }}.xml
+
+      - name: Five-configuration eval
+        run: python scripts/run_eval.py
+
+      - name: Kill drill (detect -> elect -> absorb -> degrade -> fence)
+        run: python scripts/kill_drill.py
+
+      - name: End-to-end CLI (init -> beat -> post -> status -> verify)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$(python -c 'import tempfile;print(tempfile.mkdtemp())')"
+          callosum init --root "$ROOT"
+          callosum beat --root "$ROOT" --hemi left
+          printf '{"cmd":"pytest","exit_code":0}' > "$ROOT/evidence/proof.json"
+          callosum post --root "$ROOT" --sender left --subtask concurrency \
+            --kind counterexample --body "repro attached" --evidence proof.json
+          callosum status --root "$ROOT"
+          callosum verify --root "$ROOT"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.os }}-py${{ matrix.python }}
+          path: junit-*.xml
+          if-no-files-found: ignore
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.6.9
+      - run: ruff check .
+      # `ruff format` is intentionally NOT enforced: this codebase uses a
+      # deliberate compact style and a blanket reformat would rewrite every
+      # file, destroying blame on security-critical modules.
+
+  secret-scan:
+    # This repo's entire trust model rests on identity.key staying off disk in
+    # git. Fail the build if key material or envelope state is ever committed.
+    name: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Refuse committed key material or envelope state
+        shell: bash
+        run: |
+          set -uo pipefail
+          bad=$(git ls-files | grep -E '(^|/)(identity\.key|HEAD\.json|ledger\.jsonl|capability\.json|memory\.json|epoch\.json)$|\.(key|pem)$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::secret or envelope state tracked in git:"
+            echo "$bad"
+            exit 1
+          fi
+          if git grep -nE '(BEGIN [A-Z ]*PRIVATE KEY|^[0-9a-f]{64}$)' -- '*.key' '*.pem' 2>/dev/null | head -1 | grep -q .; then
+            echo "::error::raw private key bytes found"
+            exit 1
+          fi
+          echo "clean"
+
+  claim-guard:
+    # Standing order: no public disclosure of unfiled claim language. This job
+    # is the mechanical tripwire for that policy, not a substitute for it.
+    name: claim-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Warn if claim seeds changed
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            if git diff --name-only "origin/${{ github.base_ref }}"...HEAD | grep -q '^docs/CLAIM_SEEDS.md$'; then
+              echo "::warning::docs/CLAIM_SEEDS.md changed -- owner sign-off required (see AGENTS.md)"
+            fi
+          fi
+          test -f docs/CLAIM_SEEDS.md && echo "claim seeds present"

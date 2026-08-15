@@ -52,9 +52,7 @@ def run_eval(base_dir, tasks: list, hb_interval: float = 0.05) -> dict:
         # C council: frozen positions, evidence-preferring aggregator
         ev_a = left.evidence_for(a, task)
         ev_b = right.evidence_for(b, task)
-        if a == b:
-            c = a
-        elif ev_a and not ev_b:
+        if a == b or (ev_a and not ev_b):
             c = a
         elif ev_b and not ev_a:
             c = b

@@ -25,10 +25,15 @@ pip install -e .[dev]
 ## Test
 
 ```powershell
-pytest -q                      # full suite, currently 70 tests, all adversarial-first
+pytest -q                      # full suite, currently 89 tests, all adversarial-first
+ruff check .                   # lint gate enforced in CI (formatting deliberately is not)
 python scripts\run_eval.py     # five-config eval on demo tasks (A-E)
 python scripts\kill_drill.py   # failover drill: detect -> elect -> absorb -> degrade -> fence
 ```
+
+CI runs this matrix on **Windows and Linux x Python 3.10-3.13**, plus the eval,
+the kill drill, a CLI smoke test, ruff, and a secret-scan job that fails the
+build if key material or envelope state is ever committed.
 
 Run the full suite before opening a PR. The test suites are adversarial by
 design (tamper, forgery, race, torn-write) — a change that only satisfies the
@@ -48,7 +53,7 @@ happy path is not done.
 | `ledger.py` | Hash-chained, Ed25519-signed, HEAD-anchored append-only log |
 | `corrections.py` | Three-status correction gate |
 | `adapter.py` | `MockHemisphere` + `TerminalHemisphere` (real CLI agents over file-drop) |
-| `cli.py` | `callosum post/beat/status/verify` |
+| `cli.py` | `callosum init/post/beat/status/verify` |
 | `eval/runner.py` | Five-configuration eval harness |
 
 ## Conventions
@@ -59,6 +64,11 @@ happy path is not done.
   construction). See README "Windows-first notes" for the POSIX deltas.
 - No mocks standing in for the adversarial guarantees under test — the test
   suites simulate real tamper/crash/race conditions, not idealized ones.
+- **Docs may never promise more than the code delivers.** A guarantee stated in
+  `README.md`, `PROTOCOL.md`, or a module docstring is a claim under test; if it
+  is not actually enforced on the runtime path, that is a P0, not a doc nit.
+  `SECURITY.md` carries the honest "not defended" list — extend it rather than
+  quietly narrowing a claim.
 - New gating rules or claim-adjacent mechanisms belong in `bridge.py` /
   `failover.py` with a corresponding entry in `docs/CLAIM_SEEDS.md` if they
   change claim scope — flag this explicitly in the PR description rather than
