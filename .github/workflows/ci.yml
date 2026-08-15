@@ -74,7 +74,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff==0.6.9
+      - run: pip install ruff==0.16.3
       - run: ruff check .
       # `ruff format` is intentionally NOT enforced: this codebase uses a
       # deliberate compact style and a blanket reformat would rewrite every

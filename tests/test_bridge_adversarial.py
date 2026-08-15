@@ -191,11 +191,11 @@ def test_unrecognized_kind_rejected_not_delivered_unconditionally(rig):
     bridge itself shouldn't rely on that)."""
     root, ev, ledger, cap, bus, q, bridge = rig
     q.quarantine("left", 2, ledger, reason="test")
-    msg = dict(
-        msg_id="m1", sender="left", recipient="right", subtask="concurrency",
-        kind="objection ", body="trailing space makes this an unrecognized kind",
-        evidence=[], epoch=0,
-    )
+    msg = {
+        "msg_id": "m1", "sender": "left", "recipient": "right", "subtask": "concurrency",
+        "kind": "objection ", "body": "trailing space makes this an unrecognized kind",
+        "evidence": [], "epoch": 0,
+    }
     res = bridge.transmit(msg)
     assert res["status"] == "rejected" and res["reason"] == "unrecognized_kind"
     assert _kinds(ledger, "bridge_rejected")
