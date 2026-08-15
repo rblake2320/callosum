@@ -7,6 +7,7 @@ Windows hardening: wrap the saved key with DPAPI via protect()/unprotect() below
 from __future__ import annotations
 
 import os
+import typing
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
@@ -88,7 +89,7 @@ if os.name == "nt":  # pragma: no cover - windows only
     import ctypes.wintypes as wt
 
     class _BLOB(ctypes.Structure):
-        _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+        _fields_: typing.ClassVar = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
 
     def _blob(data: bytes) -> _BLOB:
         buf = ctypes.create_string_buffer(data, len(data))
