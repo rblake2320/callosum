@@ -35,7 +35,7 @@ provisional is filed.
 
 ```powershell
 pip install -e .[dev]
-pytest -q                      # 89 tests
+pytest -q                      # 104 tests
 python scripts\run_eval.py     # five-config eval on demo tasks
 python scripts\kill_drill.py   # detect -> elect -> absorb -> degrade -> fence
 ```
@@ -64,17 +64,18 @@ harder — expect smaller or zero on synthetic mocks). Demo output: D=1.0 vs bes
 single 0.5 (+50pp), sycophancy 0.0, detection latency ≈0.23s at a 0.15s budget.
 Mocks expose perfect `evidence_for`, which flatters config C; real models won't.
 
-## Test map (89 tests, all adversarial-first)
+## Test map (104 tests, all adversarial-first)
 
 | Suite | n | Proves |
 |---|---|---|
 | `test_atomic_locks.py` | 7 | crash-safe atomic writes, CRLF byte fidelity, cross-process mutual exclusion (4 procs × 50, zero lost updates), deterministic lock timeout |
 | `test_ledger_adversarial.py` | 10 | payload tamper, reorder, mid-chain delete, tail truncation (HEAD anchor), sig forgery, attacker full-rewrite vs trusted set, HEAD corruption, torn line, 4-process concurrent appends verify |
-| `test_bridge_adversarial.py` | 13 | sha forgery, traversal, absolute path, mixed-evidence laundering, suppression + ledgered dissent, authority pass, quarantine dampening w/ credits, stale-epoch fencing, degraded-mode universal evidence |
-| `test_instrumentation_capability.py` | 14 | reveal blocked pre-commit, commit tamper, sycophancy classification/ratio, tripwire, authority flips, tie ⇒ nobody inhibits, matrix poisoning defeated by ledger rebuild, rebuild refuses tampered chain |
-| `test_failover_watchdog.py` | 11 | detection within budget, capability-weighted election, degraded + unbacked, idempotent election, both-dead ⇒ watchdog, quarantined rejoin, watchdog halt/stand-down, exactly-once bus, torn in-flight tolerance |
-| `test_envelope_corrections_eval.py` | 15 | correction gate (5), full session evidence-correction e2e, sycophant flagged, session tripwire, hot-swap identity+memory, kill drill e2e, checkpoint, HALT blocks sessions, eval report semantics (3) |
+| `test_bridge_adversarial.py` | 17 | sha forgery, traversal, absolute path, mixed-evidence laundering, suppression + ledgered dissent, authority pass, quarantine dampening w/ credits (incl. per-term novelty reset), stale-epoch fencing, degraded-mode universal evidence, unrecognized-kind fail-closed |
+| `test_instrumentation_capability.py` | 16 | reveal blocked pre-commit + ledger-verified (rejects forged entries), commit tamper, sycophancy classification/ratio, tripwire, authority flips, tie ⇒ nobody inhibits, matrix poisoning defeated by ledger rebuild, rebuild refuses tampered chain / foreign-signed chain |
+| `test_failover_watchdog.py` | 10 | detection within budget, capability-weighted election, degraded + unbacked, idempotent election, both-dead ⇒ watchdog, quarantined rejoin, watchdog halt/stand-down, exactly-once bus, torn in-flight tolerance |
+| `test_envelope_corrections_eval.py` | 21 | correction gate (5, incl. failed-run evidence rejected for verified_correction and etype-agnostic false-positive guard), full session evidence-correction e2e, sycophant flagged, session tripwire, hot-swap identity+memory (incl. quarantined-rejoin routing after a kill drill), kill drill e2e, checkpoint, HALT blocks sessions, eval report semantics (incl. survivor-scored kill drill) |
 | `test_hardening_regressions.py` | 19 | forged-forward epoch fenced, attacker-resigned chain refused by rebuild, faithful absorb replay (incl. legacy entries), capability read-modify-write under lock (4 procs x 25, zero lost), ledger crash windows vs truncation (4), key 0600 at rest (3), delivered evidence sha sealed, corrections lock + line integrity |
+| `test_adapter_terminal.py` | 3 | a real CLI peer's malformed round output (typo'd/missing key, invalid kind) is dropped, not a session-crashing exception |
 
 ## Windows-first notes
 

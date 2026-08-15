@@ -7,6 +7,7 @@ idempotent; false-death rejoin lands quarantined on the new epoch; watchdog
 halts on stalled verified progress and stands down when progress flows; the
 bus delivers exactly once (delta-push) and tolerates torn in-flight files.
 """
+import multiprocessing as mp
 import os
 import time
 
@@ -102,6 +103,55 @@ def test_double_election_idempotent(rig):
     assert fc.check_and_elect() is not None
     assert fc.check_and_elect() is None  # same death handled once
     assert get_epoch(root) == 1
+
+
+def _elect_worker(root, key_hex, out_dir, idx, now) -> None:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    s = Signer(Ed25519PrivateKey.from_private_bytes(bytes.fromhex(key_hex)))
+    ledger = Ledger(os.path.join(root, "ledger"), s)
+    cap = CapabilityMatrix(os.path.join(root, "cap.json"), ledger)
+    hb = Heartbeat(root)
+    mon = Monitor(hb, interval=0.05, misses=3)
+    q = Quarantine(root)
+    fc = FailoverController(root, ledger, cap, mon, q)
+    # A frozen, shared `now` (not each worker's own time.time()) keeps the
+    # dead/alive determination identical across all workers regardless of
+    # subprocess-spawn variance -- spawning 6 fresh interpreters on Windows
+    # can itself eat past a 150ms budget, which would otherwise make even
+    # "left" spuriously look dead by the time a slow-to-start worker runs.
+    # The actual thing under test -- the cross-process FileLock race on
+    # failover.json's read-modify-write -- is exercised regardless of what
+    # `now` is, since all 6 processes still race to acquire that lock.
+    rep = fc.check_and_elect(now=now)
+    atomic_write_json(os.path.join(out_dir, f"{idx}.json"), {"elected": rep is not None})
+
+
+def test_concurrent_check_and_elect_is_exactly_once(rig):
+    """check_and_elect()'s read-check-write of failover.json must be atomic
+    across concurrent controller instances -- e.g. a supervisor and a manual
+    kill_drill racing the same death -- or each one observes "not yet
+    handled" and independently elects, minting a separate epoch per caller
+    instead of one epoch per real event. Real OS processes, not threads:
+    the race is specifically across the FileLock's cross-process guarantee."""
+    root, ledger, cap, hb, mon, q, fc = rig
+    hb.beat("left"); hb.beat("right")
+    _kill(root, hb, mon, "right")
+    hb.beat("left")
+    now = time.time()  # frozen instant: right is stale, left is fresh, for every worker
+
+    key_hex = ledger.signer._priv.private_bytes_raw().hex()
+    out_dir = os.path.join(root, "race_out")
+    os.makedirs(out_dir, exist_ok=True)
+    procs = [mp.Process(target=_elect_worker, args=(str(root), key_hex, out_dir, i, now)) for i in range(6)]
+    [p.start() for p in procs]
+    [p.join() for p in procs]
+
+    results = [read_json(os.path.join(out_dir, f"{i}.json"))["elected"] for i in range(6)]
+    assert sum(results) == 1  # exactly one process won the election, not up to 6
+    assert get_epoch(root) == 1  # exactly one epoch bump for one real death
+    elections = [e for e in ledger.entries() if e["kind"] == "election"]
+    assert len(elections) == 1
 
 
 def test_both_dead_is_watchdog_territory(rig):

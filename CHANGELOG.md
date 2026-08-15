@@ -5,7 +5,7 @@ All notable changes to CALLOSUM. This project is proprietary; see `LICENSE`.
 ## [0.1.1] - 2026-08-15 — hardening pass
 
 Two independent adversarial passes against v0.1.0, reconciled via rebase
-(no code lost or silently overwritten). Combined test count: 70 -> 103.
+(no code lost or silently overwritten). Combined test count: 70 -> 104.
 
 ### Second pass — modules the first pass didn't touch
 
@@ -54,6 +54,16 @@ the more complete fixes below and dropped rather than duplicated.
   bare `exit_code` key — there's no `etype` taxonomy in `evidence.py` to scope
   by, and an unrelated artifact carrying a coincidental `exit_code`-named
   field must not misfire.
+- **`CapabilityMatrix.__init__` read `capability.json` with no lock** — the
+  only constructor of the three stateful primitives (`Ledger`, `Quarantine`,
+  `CapabilityMatrix`) that eagerly caches file state on construction, and the
+  only one that did so unprotected. A concurrent `atomic_write_json` replace
+  from another process's `record_outcome`/`absorb` could make a fresh
+  construction raise `PermissionError` on Windows (~7.5% of runs under real
+  concurrent construction + writes — present since v0.1.0, surfaced only by
+  a genuinely concurrent multi-process regression test for the
+  `check_and_elect()` fix above). Present since day one, in both hardening
+  passes, until this one.
 
 ### First pass — the eight defects below
 

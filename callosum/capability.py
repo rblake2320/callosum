@@ -35,7 +35,15 @@ class CapabilityMatrix:
         self.lock_path = self.path + ".lock"
         self.ledger = ledger
         self.trusted_pubs = trusted_pubs
-        self.data = self._load()
+        # Unlike record_outcome/absorb, this initial read had no lock -- a
+        # concurrent atomic_write_json's os.replace() from another process
+        # can transiently raise PermissionError to an unprotected reader on
+        # Windows (confirmed: ~7.5% of runs under real concurrent
+        # construction + writes). _load() itself must stay lock-free since
+        # record_outcome/absorb/rebuild_from_ledger already call it from
+        # inside their own FileLock and re-acquiring would deadlock.
+        with FileLock(self.lock_path):
+            self.data = self._load()
 
     def _load(self) -> dict:
         if not os.path.exists(self.path):

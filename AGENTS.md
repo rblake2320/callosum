@@ -25,7 +25,7 @@ pip install -e .[dev]
 ## Test
 
 ```powershell
-pytest -q                      # full suite, currently 103 tests, all adversarial-first
+pytest -q                      # full suite, currently 104 tests, all adversarial-first
 ruff check .                   # lint gate enforced in CI (formatting deliberately is not)
 python scripts\run_eval.py     # five-config eval on demo tasks (A-E)
 python scripts\kill_drill.py   # failover drill: detect -> elect -> absorb -> degrade -> fence
