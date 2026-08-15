@@ -7,6 +7,7 @@ idempotent; false-death rejoin lands quarantined on the new epoch; watchdog
 halts on stalled verified progress and stands down when progress flows; the
 bus delivers exactly once (delta-push) and tolerates torn in-flight files.
 """
+import os
 import time
 
 import pytest
@@ -16,7 +17,7 @@ from callosum.crypto import Signer
 from callosum.failover import FailoverController, Heartbeat, Monitor, Quarantine, Watchdog
 from callosum.ledger import Ledger
 from callosum.transport import FileDropBus, get_epoch
-from callosum.util import read_json
+from callosum.util import atomic_write_json, read_json
 
 
 @pytest.fixture
@@ -34,6 +35,19 @@ def rig(tmp_path):
     q = Quarantine(tmp_path)
     fc = FailoverController(tmp_path, ledger, cap, mon, q)
     return tmp_path, ledger, cap, hb, mon, q, fc
+
+
+def _kill(root, hb, mon, hemi: str) -> None:
+    """Backdate hemi's stored heartbeat past the death budget, in place of a
+    real time.sleep(budget + margin). Death detection only cares about the
+    STORED ts, not how it got old -- and any test that needs one side dead
+    and the OTHER side simultaneously fresh (re-beat right after the sleep)
+    only had a ~50ms margin against CI scheduler jitter between the sleep
+    ending and the next statement running. That flaked on a loaded shared
+    runner; this is deterministic."""
+    rec = hb.last(hemi)
+    atomic_write_json(os.path.join(root, "hb", f"{hemi}.json"),
+                       dict(rec, ts=rec["ts"] - (mon.budget + 0.05)))
 
 
 def test_detection_within_budget(rig):
@@ -55,7 +69,7 @@ def test_never_started_is_not_dead(rig):
 def test_election_capability_weighted_and_sealed(rig):
     root, ledger, cap, hb, mon, q, fc = rig
     hb.beat("left"); hb.beat("right")
-    time.sleep(mon.budget + 0.05)
+    _kill(root, hb, mon, "right")
     hb.beat("left")
     rep = fc.check_and_elect()
     assert rep["survivor"] == "left" and rep["dead"] == ["right"]
@@ -69,7 +83,7 @@ def test_election_capability_weighted_and_sealed(rig):
 def test_degraded_mode_and_unbacked(rig):
     root, ledger, cap, hb, mon, q, fc = rig
     hb.beat("left"); hb.beat("right")
-    time.sleep(mon.budget + 0.05)
+    _kill(root, hb, mon, "right")
     hb.beat("left")
     rep = fc.check_and_elect()
     d = read_json(root / "degraded.json")
@@ -83,7 +97,7 @@ def test_degraded_mode_and_unbacked(rig):
 def test_double_election_idempotent(rig):
     root, ledger, cap, hb, mon, q, fc = rig
     hb.beat("left"); hb.beat("right")
-    time.sleep(mon.budget + 0.05)
+    _kill(root, hb, mon, "right")
     hb.beat("left")
     assert fc.check_and_elect() is not None
     assert fc.check_and_elect() is None  # same death handled once
@@ -100,7 +114,7 @@ def test_both_dead_is_watchdog_territory(rig):
 def test_false_death_rejoin_quarantined_on_new_epoch(rig):
     root, ledger, cap, hb, mon, q, fc = rig
     hb.beat("left"); hb.beat("right")
-    time.sleep(mon.budget + 0.05)
+    _kill(root, hb, mon, "right")
     hb.beat("left")
     fc.check_and_elect()
     epoch = fc.rejoin("right", k=2)

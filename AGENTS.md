@@ -25,7 +25,7 @@ pip install -e .[dev]
 ## Test
 
 ```powershell
-pytest -q                      # full suite, currently 89 tests, all adversarial-first
+pytest -q                      # full suite, currently 103 tests, all adversarial-first
 ruff check .                   # lint gate enforced in CI (formatting deliberately is not)
 python scripts\run_eval.py     # five-config eval on demo tasks (A-E)
 python scripts\kill_drill.py   # failover drill: detect -> elect -> absorb -> degrade -> fence
@@ -73,3 +73,12 @@ happy path is not done.
   `failover.py` with a corresponding entry in `docs/CLAIM_SEEDS.md` if they
   change claim scope — flag this explicitly in the PR description rather than
   silently expanding it.
+- **One coding-agent session per branch, PR into main.** Two independent
+  Claude Code sessions once pushed separate hardening passes straight to
+  `main` concurrently — precisely the ungoverned-parallel-writer hazard this
+  codebase exists to prevent in its own subject matter. It cost a rebase, not
+  data, only because both sessions happened to touch different lines in most
+  files. Don't push directly to `main` from a session; branch, push there,
+  open a PR. If you discover mid-session that `main` moved out from under
+  you, reconcile via rebase (never force-push over another session's commits)
+  and diff for redundant fixes before merging duplicated work.

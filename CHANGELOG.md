@@ -4,9 +4,58 @@ All notable changes to CALLOSUM. This project is proprietary; see `LICENSE`.
 
 ## [0.1.1] - 2026-08-15 — hardening pass
 
-Eight defects found by adversarially probing the guarantees the v0.1.0 docs
-claimed. Each fix ships with a regression test that fails on v0.1.0.
-Test count: 70 -> 89.
+Two independent adversarial passes against v0.1.0, reconciled via rebase
+(no code lost or silently overwritten). Combined test count: 70 -> 103.
+
+### Second pass — modules the first pass didn't touch
+
+Four parallel reviewers each auditing a distinct module, plus hands-on
+adversarial testing (real exploits run, not just code reading). Two findings
+(`rebuild_from_ledger` signer pinning, corrections lock) were superseded by
+the more complete fixes below and dropped rather than duplicated.
+
+- **`reveal()` never verified the ledger, not even unpinned.** Unlike
+  `rebuild_from_ledger`, `PositionTracker.reveal()` trusted `ledger.entries()`
+  raw — an attacker with filesystem access to the ledger dir could inject an
+  unsigned `position_commit` entry and have it treated as a legitimately
+  sealed independent commitment.
+- **`check_and_elect()` had no lock around its read-modify-write**, unlike
+  every other stateful primitive in `failover.py`. Concurrent controller
+  instances could each "win" the same death event and mint their own epoch
+  (confirmed 6/6 in a real 6-process race). Now one lock spans the full
+  detect -> epoch -> absorb -> degrade sequence.
+- **Quarantine credit accepted evidence replay.** Resubmitting the same
+  artifact repeatedly earned repeated release credit. Now requires each
+  credit to include at least one sha256 not already credited *in the current
+  quarantine term* — a follow-up code review caught that the first version of
+  this fix let novelty tracking outlive its term, starving a hemisphere that
+  legitimately re-cited an old artifact in a later, unrelated incident.
+- **`E_kill_drill` scored a hardcoded `"left"`** regardless of which side
+  actually survived. Half of `demo_tasks()` kill `"left"`; the eval was
+  silently scoring the dead side's stale position (reporting 0.5 instead of
+  the true 1.0).
+- **`hot_swap()` bypassed quarantined rejoin entirely**, setting
+  `alive[side]=True` directly. An operator recovering from a kill drill via
+  hot_swap instead of `rejoin()` silently skipped the documented quarantine
+  gate. Now routes through `rejoin()` when the side was dead/absorbed, without
+  blocking or delaying the swap itself.
+- **A malformed `round_N_out.json` crashed the whole session.**
+  `TerminalHemisphere.react()` trusted a real CLI peer's draft output
+  verbatim; a typo'd or invalid key raised a raw `KeyError`/`ValueError`
+  instead of being dropped as a protocol violation.
+- **Unrecognized message kind fell through to "always passes."** Not reachable
+  via the shipped call sites today, but the bridge is documented as the sole
+  inhibitory checkpoint and shouldn't depend on callers pre-validating. Now
+  fails closed, ledgered.
+- **`verified_correction` checked evidence integrity, never substance.** A
+  correction citing its own proof of a *failed* run (`exit_code != 0`) was
+  still accepted as verified. Fix positive-matches the documented
+  `{cmd, exit_code, ...}` test-run-record shape rather than triggering on a
+  bare `exit_code` key — there's no `etype` taxonomy in `evidence.py` to scope
+  by, and an unrelated artifact carrying a coincidental `exit_code`-named
+  field must not misfire.
+
+### First pass — the eight defects below
 
 ### Security
 
